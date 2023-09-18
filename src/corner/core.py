@@ -11,17 +11,10 @@ __all__ = [
 import copy
 import logging
 
-import matplotlib
 import numpy as np
 from matplotlib import pyplot as pl
 from matplotlib.colors import LinearSegmentedColormap, colorConverter
-from matplotlib.ticker import (
-    LogFormatterMathtext,
-    LogLocator,
-    MaxNLocator,
-    NullLocator,
-    ScalarFormatter,
-)
+from matplotlib.ticker import MaxNLocator, NullLocator, ScalarFormatter
 
 try:
     from scipy.ndimage import gaussian_filter
@@ -33,9 +26,8 @@ def corner_impl(
     xs,
     bins=20,
     range=None,
-    axes_scale="linear",
     weights=None,
-    color=None,
+    color="k",
     hist_bin_factor=1,
     smooth=None,
     smooth1d=None,
@@ -49,7 +41,6 @@ def corner_impl(
     truth_color="#4682b4",
     scale_hist=False,
     quantiles=None,
-    title_quantiles=None,
     verbose=False,
     fig=None,
     max_n_ticks=5,
@@ -58,7 +49,7 @@ def corner_impl(
     reverse=False,
     labelpad=0.0,
     hist_kwargs=None,
-    **hist2d_kwargs,
+    **hist2d_kwargs
 ):
     if quantiles is None:
         quantiles = []
@@ -70,20 +61,6 @@ def corner_impl(
     # If no separate titles are set, copy the axis labels
     if titles is None:
         titles = labels
-
-    # deal with title quantiles so they much quantiles unless desired otherwise
-    if title_quantiles is None:
-        if len(quantiles) > 0:
-            title_quantiles = quantiles
-        else:
-            # a default for when quantiles not supplied.
-            title_quantiles = [0.16, 0.5, 0.84]
-
-    if show_titles and len(title_quantiles) != 3:
-        raise ValueError(
-            "'title_quantiles' must contain exactly three values; "
-            "pass a length-3 list or array using the 'title_quantiles' argument"
-        )
 
     # Deal with 1D sample lists.
     xs = _parse_input(xs)
@@ -112,20 +89,13 @@ def corner_impl(
     plotdim = factor * K + factor * (K - 1.0) * whspace
     dim = lbdim + plotdim + trdim
 
-    # Make axes_scale into a list if necessary, otherwise check length
-    if isinstance(axes_scale, str):
-        axes_scale = [axes_scale] * K
-    else:
-        assert (
-            len(axes_scale) == K
-        ), "'axes_scale' should contain as many elements as data dimensions"
-
     # Create a new figure if one wasn't provided.
     new_fig = True
     if fig is None:
         fig, axes = pl.subplots(K, K, figsize=(dim, dim))
     else:
-        axes, new_fig = _get_fig_axes(fig, K)
+        new_fig = False
+        axes = _get_fig_axes(fig, K)
 
     # Format the figure.
     lb = lbdim / dim
@@ -135,7 +105,6 @@ def corner_impl(
     )
 
     # Parse the parameter ranges.
-    force_range = False
     if range is None:
         if "extents" in hist2d_kwargs:
             logging.warning(
@@ -160,8 +129,6 @@ def corner_impl(
                 )
 
     else:
-        force_range = True
-
         # If any of the extents are percentiles, convert them to ranges.
         # Also make sure it's a normal list.
         range = list(range)
@@ -189,10 +156,6 @@ def corner_impl(
                 "Dimension mismatch between hist_bin_factor and " "range"
             )
 
-    # Set up the default plotting arguments.
-    if color is None:
-        color = matplotlib.rcParams["ytick.color"]
-
     # Set up the default histogram keywords.
     if hist_kwargs is None:
         hist_kwargs = dict()
@@ -214,37 +177,34 @@ def corner_impl(
                 ax = axes[i, i]
 
         # Plot the histograms.
-        n_bins_1d = int(max(1, np.round(hist_bin_factor[i] * bins[i])))
-        if axes_scale[i] == "linear":
-            bins_1d = np.linspace(min(range[i]), max(range[i]), n_bins_1d + 1)
-        elif axes_scale[i] == "log":
-            bins_1d = np.logspace(
-                np.log10(min(range[i])), np.log10(max(range[i])), n_bins_1d + 1
-            )
-        else:
-            raise ValueError(
-                "Scale "
-                + axes_scale[i]
-                + "for dimension "
-                + str(i)
-                + "not supported. Use 'linear' or 'log'"
-            )
         if smooth1d is None:
-            n, _, _ = ax.hist(x, bins=bins_1d, weights=weights, **hist_kwargs)
+            bins_1d = int(max(1, np.round(hist_bin_factor[i] * bins[i])))
+            n, _, _ = ax.hist(
+                x,
+                bins=bins_1d,
+                weights=weights,
+                range=np.sort(range[i]),
+                **hist_kwargs,
+            )
         else:
             if gaussian_filter is None:
                 raise ImportError("Please install scipy for smoothing")
-            n, _ = np.histogram(x, bins=bins_1d, weights=weights)
+            n, b = np.histogram(
+                x, bins=bins[i], weights=weights, range=np.sort(range[i])
+            )
             n = gaussian_filter(n, smooth1d)
-            x0 = np.array(list(zip(bins_1d[:-1], bins_1d[1:]))).flatten()
+            x0 = np.array(list(zip(b[:-1], b[1:]))).flatten()
             y0 = np.array(list(zip(n, n))).flatten()
             ax.plot(x0, y0, **hist_kwargs)
 
         # Plot quantiles if wanted.
         if len(quantiles) > 0:
             qvalues = quantile(x, quantiles, weights=weights)
-            for q in qvalues:
-                ax.axvline(q, ls="dashed", color=color)
+            for j,q in enumerate(qvalues):
+                if quantiles[j]==0.5:
+                    ax.axvline(q, ls="solid", color='green')
+                else:
+                    ax.axvline(q, ls="dashed", color=color)
 
             if verbose:
                 print("Quantiles:")
@@ -252,26 +212,59 @@ def corner_impl(
 
         if show_titles:
             title = None
-            if title_fmt is not None:
+            if title_fmt == 'scientific':
+                # custom behaviour for scientific notation
+                q_16, q_50, q_84 = quantile(
+                    x, [0.16, 0.5, 0.84], weights=weights
+                )
+
+                q_m, q_p = q_50 - q_16, q_84 - q_50
+
+                exp = (np.log10(np.abs(q_50))).astype(int)
+                expstr = ""
+
+                titlefmt='.1f'
+                if exp == 1:
+                    titlefmt='.0f'
+                if exp < 0:
+                    exp -= 1
+                    q_50,q_m,q_p = np.array([q_50,q_m,q_p])*(10.**(-exp))
+                    expstr = "\cdot 10^{%i}"%exp
+                if exp > 1:
+                    q_50,q_m,q_p = np.array([q_50,q_m,q_p])*(10.**(-exp))
+                    expstr = "\cdot 10^{%i}"%exp
+                    
+                # Format the quantile display.
+                fmt = "{{0:{0}}}".format(titlefmt).format
+                title = r"${{{0}}}_{{-{1}}}^{{+{2}}}{3}$"
+                title = title.format(fmt(q_50), fmt(q_m), fmt(q_p), expstr)
+                
+                # Add in the column name if it's given.
+                if titles is not None:
+                    title = "{0} = {1}".format(titles[i], title)
+                    
+            elif title_fmt is not None:
                 # Compute the quantiles for the title. This might redo
                 # unneeded computation but who cares.
-                q_lo, q_mid, q_hi = quantile(
-                    x, title_quantiles, weights=weights
+                q_16, q_50, q_84 = quantile(
+                    x, [0.16, 0.5, 0.84], weights=weights
                 )
-                q_m, q_p = q_mid - q_lo, q_hi - q_mid
+                q_m, q_p = q_50 - q_16, q_84 - q_50
 
                 # Format the quantile display.
                 fmt = "{{0:{0}}}".format(title_fmt).format
                 title = r"${{{0}}}_{{-{1}}}^{{+{2}}}$"
-                title = title.format(fmt(q_mid), fmt(q_m), fmt(q_p))
+                title = title.format(fmt(q_50), fmt(q_m), fmt(q_p))
 
                 # Add in the column name if it's given.
                 if titles is not None:
                     title = "{0} = {1}".format(titles[i], title)
-
+                        
             elif titles is not None:
                 title = "{0}".format(titles[i])
 
+
+                        
             if title is not None:
                 if reverse:
                     if "pad" in title_kwargs.keys():
@@ -286,41 +279,32 @@ def corner_impl(
                     ax.set_title(title, **title_kwargs)
 
         # Set up the axes.
-        _set_xlim(force_range, new_fig, ax, range[i])
-        ax.set_xscale(axes_scale[i])
+        _set_xlim(new_fig, ax, range[i])
         if scale_hist:
             maxn = np.max(n)
-            _set_ylim(force_range, new_fig, ax, [-0.1 * maxn, 1.1 * maxn])
+            _set_ylim(new_fig, ax, [-0.1 * maxn, 1.1 * maxn])
 
         else:
-            _set_ylim(force_range, new_fig, ax, [0, 1.1 * np.max(n)])
+            _set_ylim(new_fig, ax, [0, 1.1 * np.max(n)])
 
         ax.set_yticklabels([])
         if max_n_ticks == 0:
             ax.xaxis.set_major_locator(NullLocator())
             ax.yaxis.set_major_locator(NullLocator())
         else:
-            if axes_scale[i] == "linear":
-                ax.xaxis.set_major_locator(
-                    MaxNLocator(max_n_ticks, prune="lower")
-                )
-            elif axes_scale[i] == "log":
-                ax.xaxis.set_major_locator(LogLocator(numticks=max_n_ticks))
+            ax.xaxis.set_major_locator(MaxNLocator(max_n_ticks, prune="lower"))
             ax.yaxis.set_major_locator(NullLocator())
 
         if i < K - 1:
             if top_ticks:
                 ax.xaxis.set_ticks_position("top")
                 [l.set_rotation(45) for l in ax.get_xticklabels()]
-                [l.set_rotation(45) for l in ax.get_xticklabels(minor=True)]
             else:
                 ax.set_xticklabels([])
-                ax.set_xticklabels([], minor=True)
         else:
             if reverse:
                 ax.xaxis.tick_top()
-            [l.set_rotation(45) for l in ax.get_xticklabels()]
-            [l.set_rotation(45) for l in ax.get_xticklabels(minor=True)]
+            [lbl.set_rotation(45) for lbl in ax.get_xticklabels()]
             if labels is not None:
                 if reverse:
                     if "labelpad" in label_kwargs.keys():
@@ -340,12 +324,9 @@ def corner_impl(
                     ax.xaxis.set_label_coords(0.5, -0.3 - labelpad)
 
             # use MathText for axes ticks
-            if axes_scale[i] == "linear":
-                ax.xaxis.set_major_formatter(
-                    ScalarFormatter(useMathText=use_math_text)
-                )
-            elif axes_scale[i] == "log":
-                ax.xaxis.set_major_formatter(LogFormatterMathtext())
+            ax.xaxis.set_major_formatter(
+                ScalarFormatter(useMathText=use_math_text)
+            )
 
         for j, y in enumerate(xs):
             if np.shape(xs)[0] == 1:
@@ -372,13 +353,11 @@ def corner_impl(
                 x,
                 ax=ax,
                 range=[range[j], range[i]],
-                axes_scale=[axes_scale[j], axes_scale[i]],
                 weights=weights,
                 color=color,
                 smooth=smooth,
                 bins=[bins[j], bins[i]],
                 new_fig=new_fig,
-                force_range=force_range,
                 **hist2d_kwargs,
             )
 
@@ -386,32 +365,19 @@ def corner_impl(
                 ax.xaxis.set_major_locator(NullLocator())
                 ax.yaxis.set_major_locator(NullLocator())
             else:
-                if axes_scale[j] == "linear":
-                    ax.xaxis.set_major_locator(
-                        MaxNLocator(max_n_ticks, prune="lower")
-                    )
-                elif axes_scale[j] == "log":
-                    ax.xaxis.set_major_locator(
-                        LogLocator(numticks=max_n_ticks)
-                    )
-
-                if axes_scale[i] == "linear":
-                    ax.yaxis.set_major_locator(
-                        MaxNLocator(max_n_ticks, prune="lower")
-                    )
-                elif axes_scale[i] == "log":
-                    ax.yaxis.set_major_locator(
-                        LogLocator(numticks=max_n_ticks)
-                    )
+                ax.xaxis.set_major_locator(
+                    MaxNLocator(max_n_ticks, prune="lower")
+                )
+                ax.yaxis.set_major_locator(
+                    MaxNLocator(max_n_ticks, prune="lower")
+                )
 
             if i < K - 1:
                 ax.set_xticklabels([])
-                ax.set_xticklabels([], minor=True)
             else:
                 if reverse:
                     ax.xaxis.tick_top()
                 [l.set_rotation(45) for l in ax.get_xticklabels()]
-                [l.set_rotation(45) for l in ax.get_xticklabels(minor=True)]
                 if labels is not None:
                     ax.set_xlabel(labels[j], **label_kwargs)
                     if reverse:
@@ -420,21 +386,16 @@ def corner_impl(
                         ax.xaxis.set_label_coords(0.5, -0.3 - labelpad)
 
                 # use MathText for axes ticks
-                if axes_scale[j] == "linear":
-                    ax.xaxis.set_major_formatter(
-                        ScalarFormatter(useMathText=use_math_text)
-                    )
-                elif axes_scale[j] == "log":
-                    ax.xaxis.set_major_formatter(LogFormatterMathtext())
+                ax.xaxis.set_major_formatter(
+                    ScalarFormatter(useMathText=use_math_text)
+                )
 
             if j > 0:
                 ax.set_yticklabels([])
-                ax.set_yticklabels([], minor=True)
             else:
                 if reverse:
                     ax.yaxis.tick_right()
                 [l.set_rotation(45) for l in ax.get_yticklabels()]
-                [l.set_rotation(45) for l in ax.get_yticklabels(minor=True)]
                 if labels is not None:
                     if reverse:
                         ax.set_ylabel(labels[i], rotation=-90, **label_kwargs)
@@ -444,19 +405,15 @@ def corner_impl(
                         ax.yaxis.set_label_coords(-0.3 - labelpad, 0.5)
 
                 # use MathText for axes ticks
-                if axes_scale[i] == "linear":
-                    ax.yaxis.set_major_formatter(
-                        ScalarFormatter(useMathText=use_math_text)
-                    )
-                elif axes_scale[i] == "log":
-                    ax.yaxis.set_major_formatter(LogFormatterMathtext())
+                ax.yaxis.set_major_formatter(
+                    ScalarFormatter(useMathText=use_math_text)
+                )
 
     if truths is not None:
-        overplot_lines(fig, truths, reverse=reverse, color=truth_color)
+        overplot_lines(fig, truths, color=truth_color)
         overplot_points(
             fig,
             [[np.nan if t is None else t for t in truths]],
-            reverse=reverse,
             marker="s",
             color=truth_color,
         )
@@ -522,7 +479,6 @@ def hist2d(
     y,
     bins=20,
     range=None,
-    axes_scale=["linear", "linear"],
     weights=None,
     levels=None,
     smooth=None,
@@ -539,9 +495,9 @@ def hist2d(
     data_kwargs=None,
     pcolor_kwargs=None,
     new_fig=True,
-    force_range=False,
-    **kwargs,
+    **kwargs
 ):
+
     """
     Plot a 2-D histogram of samples.
 
@@ -553,17 +509,11 @@ def hist2d(
     y : array_like[nsamples,]
        The samples.
 
-    axes_scale : iterable (2,)
-        Scale (``"linear"``, ``"log"``) to use for each dimension.
-
     quiet : bool
         If true, suppress warnings for small datasets.
 
     levels : array_like
         The contour levels to draw.
-        If None, (0.5, 1, 1.5, 2)-sigma equivalent contours are drawn,
-        i.e., containing 11.8%, 39.3%, 67.5% and 86.4% of the samples.
-        See https://corner.readthedocs.io/en/latest/pages/sigmas/
 
     ax : matplotlib.Axes
         A axes instance on which to add the 2-D histogram.
@@ -615,24 +565,21 @@ def hist2d(
 
     # Set up the default plotting arguments.
     if color is None:
-        color = matplotlib.rcParams["ytick.color"]
+        color = "k"
 
     # Choose the default "sigma" contour levels.
     if levels is None:
         levels = 1.0 - np.exp(-0.5 * np.arange(0.5, 2.1, 0.5) ** 2)
 
-    # This is the base color of the axis (background color)
-    base_color = ax.get_facecolor()
-
     # This is the color map for the density plot, over-plotted to indicate the
     # density of the points near the center.
     density_cmap = LinearSegmentedColormap.from_list(
-        "density_cmap", [color, colorConverter.to_rgba(base_color, alpha=0.0)]
+        "density_cmap", [color, (1, 1, 1, 0)]
     )
 
     # This color map is used to hide the points at the high density areas.
-    base_cmap = LinearSegmentedColormap.from_list(
-        "base_cmap", [base_color, base_color], N=2
+    white_cmap = LinearSegmentedColormap.from_list(
+        "white_cmap", [(1, 1, 1), (1, 1, 1)], N=2
     )
 
     # This "color map" is the list of colors for the contour levels if the
@@ -642,42 +589,13 @@ def hist2d(
     for i, l in enumerate(levels):
         contour_cmap[i][-1] *= float(i) / (len(levels) + 1)
 
-    # Parse the bin specifications.
-    try:
-        bins = [int(bins) for _ in range]
-    except TypeError:
-        if len(bins) != len(range):
-            raise ValueError("Dimension mismatch between bins and range")
-
     # We'll make the 2D histogram to directly estimate the density.
-    bins_2d = []
-    if axes_scale[0] == "linear":
-        bins_2d.append(np.linspace(min(range[0]), max(range[0]), bins[0] + 1))
-    elif axes_scale[0] == "log":
-        bins_2d.append(
-            np.logspace(
-                np.log10(min(range[0])),
-                np.log10(max(range[0])),
-                bins[0] + 1,
-            )
-        )
-
-    if axes_scale[1] == "linear":
-        bins_2d.append(np.linspace(min(range[1]), max(range[1]), bins[1] + 1))
-    elif axes_scale[1] == "log":
-        bins_2d.append(
-            np.logspace(
-                np.log10(min(range[1])),
-                np.log10(max(range[1])),
-                bins[1] + 1,
-            )
-        )
-
     try:
         H, X, Y = np.histogram2d(
             x.flatten(),
             y.flatten(),
-            bins=bins_2d,
+            bins=bins,
+            range=list(map(np.sort, range)),
             weights=weights,
         )
     except ValueError:
@@ -685,11 +603,6 @@ def hist2d(
             "It looks like at least one of your sample columns "
             "have no dynamic range. You could try using the "
             "'range' argument."
-        )
-    if H.sum() == 0:
-        raise ValueError(
-            "It looks like the provided 'range' is not valid "
-            "or the sample is empty."
         )
 
     if smooth is not None:
@@ -764,7 +677,7 @@ def hist2d(
             Y2,
             H2.T,
             [V.min(), H.max()],
-            cmap=base_cmap,
+            cmap=white_cmap,
             antialiased=False,
         )
 
@@ -797,13 +710,11 @@ def hist2d(
         contour_kwargs["colors"] = contour_kwargs.get("colors", color)
         ax.contour(X2, Y2, H2.T, V, **contour_kwargs)
 
-    _set_xlim(force_range, new_fig, ax, range[0])
-    _set_ylim(force_range, new_fig, ax, range[1])
-    ax.set_xscale(axes_scale[0])
-    ax.set_yscale(axes_scale[1])
+    _set_xlim(new_fig, ax, range[0])
+    _set_ylim(new_fig, ax, range[1])
 
 
-def overplot_lines(fig, xs, reverse=False, **kwargs):
+def overplot_lines(fig, xs, **kwargs):
     """
     Overplot lines on a figure generated by ``corner.corner``
 
@@ -818,39 +729,24 @@ def overplot_lines(fig, xs, reverse=False, **kwargs):
        call that originally generated the figure. The entries can optionally
        be ``None`` to omit the line in that axis.
 
-    reverse: bool
-       A boolean flag that should be set to 'True' if the corner plot itself
-       was plotted with 'reverse=True'.
-
     **kwargs
         Any remaining keyword arguments are passed to the ``ax.axvline``
         method.
 
     """
     K = len(xs)
-    axes, _ = _get_fig_axes(fig, K)
-    if reverse:
-        for k1 in range(K):
+    axes = _get_fig_axes(fig, K)
+    for k1 in range(K):
+        if xs[k1] is not None:
+            axes[k1, k1].axvline(xs[k1], **kwargs)
+        for k2 in range(k1 + 1, K):
             if xs[k1] is not None:
-                axes[K - k1 - 1, K - k1 - 1].axvline(xs[k1], **kwargs)
-            for k2 in range(k1 + 1, K):
-                if xs[k1] is not None:
-                    axes[K - k2 - 1, K - k1 - 1].axvline(xs[k1], **kwargs)
-                if xs[k2] is not None:
-                    axes[K - k2 - 1, K - k1 - 1].axhline(xs[k2], **kwargs)
-
-    else:
-        for k1 in range(K):
-            if xs[k1] is not None:
-                axes[k1, k1].axvline(xs[k1], **kwargs)
-            for k2 in range(k1 + 1, K):
-                if xs[k1] is not None:
-                    axes[k2, k1].axvline(xs[k1], **kwargs)
-                if xs[k2] is not None:
-                    axes[k2, k1].axhline(xs[k2], **kwargs)
+                axes[k2, k1].axvline(xs[k1], **kwargs)
+            if xs[k2] is not None:
+                axes[k2, k1].axhline(xs[k2], **kwargs)
 
 
-def overplot_points(fig, xs, reverse=False, **kwargs):
+def overplot_points(fig, xs, **kwargs):
     """
     Overplot points on a figure generated by ``corner.corner``
 
@@ -864,10 +760,6 @@ def overplot_points(fig, xs, reverse=False, **kwargs):
        that is compatible with the :func:`corner.corner` call that originally
        generated the figure.
 
-    reverse: bool
-       A boolean flag that should be set to 'True' if the corner plot itself
-       was plotted with 'reverse=True'.
-
     **kwargs
         Any remaining keyword arguments are passed to the ``ax.plot``
         method.
@@ -877,16 +769,10 @@ def overplot_points(fig, xs, reverse=False, **kwargs):
     kwargs["linestyle"] = kwargs.pop("linestyle", "none")
     xs = _parse_input(xs)
     K = len(xs)
-    axes, _ = _get_fig_axes(fig, K)
-    if reverse:
-        for k1 in range(K):
-            for k2 in range(k1):
-                axes[K - k1 - 1, K - k2 - 1].plot(xs[k2], xs[k1], **kwargs)
-
-    else:
-        for k1 in range(K):
-            for k2 in range(k1 + 1, K):
-                axes[k2, k1].plot(xs[k1], xs[k2], **kwargs)
+    axes = _get_fig_axes(fig, K)
+    for k1 in range(K):
+        for k2 in range(k1 + 1, K):
+            axes[k2, k1].plot(xs[k1], xs[k2], **kwargs)
 
 
 def _parse_input(xs):
@@ -901,9 +787,9 @@ def _parse_input(xs):
 
 def _get_fig_axes(fig, K):
     if not fig.axes:
-        return fig.subplots(K, K), True
+        return fig.subplots(K, K)
     try:
-        return np.array(fig.axes).reshape((K, K)), False
+        return np.array(fig.axes).reshape((K, K))
     except ValueError:
         raise ValueError(
             (
@@ -913,15 +799,15 @@ def _get_fig_axes(fig, K):
         )
 
 
-def _set_xlim(force, new_fig, ax, new_xlim):
-    if force or new_fig:
+def _set_xlim(new_fig, ax, new_xlim):
+    if new_fig:
         return ax.set_xlim(new_xlim)
     xlim = ax.get_xlim()
     return ax.set_xlim([min(xlim[0], new_xlim[0]), max(xlim[1], new_xlim[1])])
 
 
-def _set_ylim(force, new_fig, ax, new_ylim):
-    if force or new_fig:
+def _set_ylim(new_fig, ax, new_ylim):
+    if new_fig:
         return ax.set_ylim(new_ylim)
     ylim = ax.get_ylim()
     return ax.set_ylim([min(ylim[0], new_ylim[0]), max(ylim[1], new_ylim[1])])
